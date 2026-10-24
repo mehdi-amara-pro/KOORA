@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KOORA Match Viewer</title>
+  <style>
+    :root {
+      --bg: #0b1410; --panel: rgba(12, 18, 16, 0.86); --line: rgba(255, 255, 255, 0.12);
+      --text: #eef2ee; --muted: #9fb0a6; --accent: #3ddc97; --warn: #ffb547;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+    #stage { position: absolute; inset: 0; }
+    #stage canvas { display: block; }
+    .labels { position: absolute; inset: 0; pointer-events: none; }
+    .labels.hidden { display: none; }
+
+    .tag { font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 10px; white-space: nowrap;
+      background: rgba(0, 0, 0, 0.55); color: #fff; transform: translateY(-4px); }
+    .tag b { font-weight: 700; margin-right: 3px; }
+    .tag .spd { color: var(--warn); font-weight: 600; margin-left: 4px; }
+    .tag.owner { outline: 1.5px solid var(--accent); }
+
+    .panel { position: absolute; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 12px; backdrop-filter: blur(6px); }
+    #scoreboard { top: 14px; left: 14px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+    .team { display: flex; align-items: center; gap: 6px; font-weight: 700; letter-spacing: 0.04em; }
+    .swatch { width: 10px; height: 10px; border-radius: 3px; }
+    #score { font-size: 20px; font-weight: 800; min-width: 54px; text-align: center; font-variant-numeric: tabular-nums; }
+    #clock { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 6px; }
+
+    #feed { top: 14px; right: 14px; width: 280px; padding: 8px 10px; max-height: 45vh; overflow: hidden; }
+    #feed h3 { margin: 0 0 6px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .item { font-size: 13px; padding: 4px 0 4px 8px; border-left: 3px solid var(--line); margin-bottom: 4px; }
+    .item .when { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+    .item.goal { font-weight: 700; }
+
+    #controls { left: 50%; bottom: 14px; transform: translateX(-50%); width: min(980px, calc(100% - 28px));
+      padding: 10px 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+    #controls label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    button, select { background: #1a2420; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+      padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+    button.active { border-color: var(--accent); color: var(--accent); }
+    #play { min-width: 74px; }
+    #timeline { flex: 1 1 260px; accent-color: var(--accent); }
+    .group { display: flex; gap: 4px; }
+
+    #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      pointer-events: none; color: var(--muted); font-size: 15px; text-align: center; padding: 20px; }
+    #status code { background: #1a2420; padding: 2px 6px; border-radius: 6px; color: var(--text); }
+    @media (max-width: 720px) { #feed { display: none; } }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div id="scoreboard" class="panel">
+    <span class="team"><span class="swatch" id="home-swatch"></span><span id="home-code">HOME</span></span>
+    <span id="score">0 – 0</span>
+    <span class="team"><span id="away-code">AWAY</span><span class="swatch" id="away-swatch"></span></span>
+    <span id="clock">1st 00:00</span>
+  </div>
+
+  <div id="feed" class="panel"><h3>Key moments</h3><div id="feed-items"></div></div>
+
+  <div id="controls" class="panel">
+    <select id="match" title="Match"></select>
+    <button id="play">Pause</button>
+    <select id="speed" title="Playback speed">
+      <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+      <option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+    </select>
+    <input id="timeline" type="range" min="0" max="1000" value="0" step="1">
+    <div class="group" id="cams">
+      <button data-cam="broadcast" class="active">Broadcast</button>
+      <button data-cam="tactical">Tactical</button>
+      <button data-cam="player">Player</button>
+      <button data-cam="free">Free</button>
+    </div>
+    <select id="follow" title="Player to follow"></select>
+    <label><input type="checkbox" id="show-labels" checked> Names</label>
+    <label><input type="checkbox" id="show-speed" checked> Speed ≥ <span id="sprint-kmh"></span> km/h</label>
+  </div>
+
+  <div id="status">Loading…</div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+    // ---------------------------------------------------------------- constants
+    const L = 105, W = 68;                 // pitch size in metres (matches the contracts)
+    const SPRINT_KMH = 25;                 // speed badge threshold (the brief's "speed indicator")
+    const $ = (id) => document.getElementById(id);
+    $('sprint-kmh').textContent = SPRINT_KMH;
+
+    // Pitch coordinates -> three.js: x along the pitch, y up, z across the pitch.
+    const toScene = (x, y, h = 0) => new THREE.Vector3(x - L / 2, h, y - W / 2);
+
+    // ---------------------------------------------------------------- renderer and scene
+    const stage = $('stage');
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    stage.appendChild(renderer.domElement);
+
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.domElement.className = 'labels';
+    stage.appendChild(labelRenderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b1410);
+    scene.fog = new THREE.Fog(0x0b1410, 160, 300);
+
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 600);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enabled = false;
+    controls.maxPolarAngle = Math.PI * 0.49;
+
+    scene.add(new THREE.HemisphereLight(0xe8f4ff, 0x20391f, 1.1));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(-25, 90, 30);   // high sun: shadows sit almost under players and the ball
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 50, bottom: -50, near: 10, far: 220 });
+    scene.add(sun);
+
+    // ---------------------------------------------------------------- pitch
+    function buildPitch() {
+      const g = new THREE.Group();
+      const surround = new THREE.Mesh(new THREE.PlaneGeometry(135, 100),
+        new THREE.MeshStandardMaterial({ color: 0x1f5a2d, roughness: 1 }));
+      surround.rotation.x = -Math.PI / 2; surround.receiveShadow = true; g.add(surround);
+
+      const stripes = 14, sw = L / stripes;
+      for (let i = 0; i < stripes; i++) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(sw, W),
+          new THREE.MeshStandardMaterial({ color: i % 2 ? 0x2f8a43 : 0x2b803e, roughness: 1 }));
+        m.rotation.x = -Math.PI / 2;
+        m.position.set(-L / 2 + sw * (i + 0.5), 0.004, 0);
+        m.receiveShadow = true; g.add(m);
+      }
+
+      const lineMat = new THREE.MeshBasicMaterial({ color: 0xf2f6f0 });
+      const LW = 0.12, Y = 0.01;
+      const seg = (x0, y0, x1, y1) => {
+        const len = Math.hypot(x1 - x0, y1 - y0);
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(len + LW, LW), lineMat);
+        m.rotation.set(-Math.PI / 2, 0, -Math.atan2(y1 - y0, x1 - x0));
+        m.position.copy(toScene((x0 + x1) / 2, (y0 + y1) / 2, Y)); g.add(m);
+      };
+      const rect = (x0, y0, x1, y1) => { seg(x0, y0, x1, y0); seg(x1, y0, x1, y1); seg(x1, y1, x0, y1); seg(x0, y1, x0, y0); };
+      const ring = (cx, cy, r, start = 0, length = Math.PI * 2) => {
+        const m = new THREE.Mesh(new THREE.RingGeometry(r - LW / 2, r + LW / 2, 72, 1, start, length), lineMat);
+        m.rotation.x = -Math.PI / 2; m.position.copy(toScene(cx, cy, Y)); g.add(m);
+      };
+      const spot = (x, y) => {
+        const m = new THREE.Mesh(new THREE.CircleGeometry(0.2, 16), lineMat);
+        m.rotation.x = -Math.PI / 2; m.position.copy(toScene(x, y, Y)); g.add(m);
+      };
+
+      rect(0, 0, L, W);
+      seg(L / 2, 0, L / 2, W);
+      ring(L / 2, W / 2, 9.15); spot(L / 2, W / 2);
+      rect(0, W / 2 - 20.16, 16.5, W / 2 + 20.16); rect(L - 16.5, W / 2 - 20.16, L, W / 2 + 20.16);
+      rect(0, W / 2 - 9.16, 5.5, W / 2 + 9.16);    rect(L - 5.5, W / 2 - 9.16, L, W / 2 + 9.16);
+      spot(11, W / 2); spot(L - 11, W / 2);
+      const arc = Math.acos(5.5 / 9.15);   // the part of the penalty arc outside the box
+      ring(11, W / 2, 9.15, -arc, 2 * arc); ring(L - 11, W / 2, 9.15, Math.PI - arc, 2 * arc);
+
+      const postMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+      const netMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
+      for (const [gx, out] of [[0, -1], [L, 1]]) {
+        for (const py of [W / 2 - 3.66, W / 2 + 3.66]) {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.44, 12), postMat);
+          post.position.copy(toScene(gx, py, 1.22)); post.castShadow = true; g.add(post);
+        }
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 7.32, 12), postMat);
+        bar.rotation.x = Math.PI / 2; bar.position.copy(toScene(gx, W / 2, 2.44)); bar.castShadow = true; g.add(bar);
+        const net = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2, 2.44, 7.32)), netMat);
+        net.position.copy(toScene(gx + out, W / 2, 1.22)); g.add(net);
+      }
+      scene.add(g);
+    }
+    buildPitch();
+
+    // ---------------------------------------------------------------- ball
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.24, 24, 16),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 }));
+    ball.castShadow = true; scene.add(ball);
+
+    const TRAIL = 36;   // ~3 seconds at 12.5 fps
+    const trailGeom = new THREE.BufferGeometry();
+    trailGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+    const trail = new THREE.Line(trailGeom, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45 }));
+    trail.frustumCulled = false; scene.add(trail);
+    let trailPoints = [];
+
+    const ownerRing = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.0, 32),
+      new THREE.MeshBasicMaterial({ color: 0x3ddc97, transparent: true, opacity: 0.9 }));
+    ownerRing.rotation.x = -Math.PI / 2; scene.add(ownerRing);
+
+    // ---------------------------------------------------------------- state
+    let replay = null, frames = [], events = [], players = [], meshes = [];
+    let duration = 0, t = 0, playing = true, speed = 1, scrubbing = false;
+    let camMode = 'broadcast', followIdx = 0;
+    let periodStart = { 1: 0, 2: 0 };
+    const nameOf = {}; const sideOf = {};
+
+    // ---------------------------------------------------------------- players
+    function clearPlayers() {
+      for (const m of meshes) { m.group.remove(m.label); m.label.element.remove(); scene.remove(m.group); }
+      meshes = [];
+    }
+
+    function makePlayer(p, team) {
+      const isKeeper = p.position === 'GK';
+      const kit = isKeeper ? (p.side === 'home' ? '#3cb371' : '#f2c94c') : team.primary;
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 1.0, 6, 14),
+        new THREE.MeshStandardMaterial({ color: kit, roughness: 0.55 }));
+      body.position.y = 0.88; body.castShadow = true; group.add(body);
+      const base = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 24),
+        new THREE.MeshBasicMaterial({ color: team.secondary, transparent: true, opacity: 0.8 }));
+      base.rotation.x = -Math.PI / 2; base.position.y = 0.02; group.add(base);
+
+      const el = document.createElement('div');
+      el.className = 'tag';
+      el.innerHTML = `<b>${p.number}</b>${p.short}<span class="spd"></span>`;
+      const label = new CSS2DObject(el);
+      label.position.set(0, 2.25, 0); group.add(label);
+      scene.add(group);
+      return { group, label, el, spd: el.querySelector('.spd') };
+    }
+
+    // ---------------------------------------------------------------- loading
+    async function loadList() {
+      const list = await (await fetch('/api/matches')).json();
+      const select = $('match');
+      select.innerHTML = list.map((m) => `<option value="${m.id}">${m.id} (${m.size_mb} MB)</option>`).join('');
+      if (!list.length) {
+        $('status').innerHTML = 'No matches yet. In a terminal, run<br><br><code>python -m koora.simulator.run</code><br><br>then refresh this page.';
+        return;
+      }
+      await load(list[0].id);
+    }
+
+    async function load(id) {
+      $('status').textContent = 'Loading match…';
+      const res = await fetch(`/api/matches/${encodeURIComponent(id)}/replay`);
+      if (!res.ok) { $('status').textContent = `Could not load ${id}`; return; }
+      setup(await res.json());
+      $('status').textContent = '';
+    }
+
+    function setup(r) {
+      replay = r; frames = r.frames; events = r.events; players = r.players;
+      duration = frames.length ? frames[frames.length - 1][0] : 0;
+      t = 0; playing = true; $('play').textContent = 'Pause'; trailPoints = [];
+      periodStart = { 1: 0, 2: 0 };
+      for (const f of frames) if (f[1] === 2) { periodStart[2] = f[0]; break; }
+
+      clearPlayers();
+      for (const p of players) {
+        meshes.push(makePlayer(p, r.teams[p.side]));
+        nameOf[p.id] = p.short; sideOf[p.id] = p.side;
+      }
+      for (const side of ['home', 'away']) {
+        $(`${side}-code`).textContent = r.teams[side].code;
+        $(`${side}-swatch`).style.background = r.teams[side].primary;
+      }
+      $('follow').innerHTML = players.map((p, i) =>
+        `<option value="${i}">${r.teams[p.side].code} ${p.number} ${p.short}</option>`).join('');
+      followIdx = players.findIndex((p) => p.position === 'FWD');
+      $('follow').value = followIdx;
+    }
+
+    // ---------------------------------------------------------------- playback
+    function frameIndex(time) {          // last frame with t <= time
+      let lo = 0, hi = frames.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (frames[mid][0] <= time) lo = mid; else hi = mid - 1; }
+      return lo;
+    }
+
+    const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+    function describe(e) {
+      const who = nameOf[e.player_id] ?? '';
+      switch (e.type) {
+        case 'shot':
+          if (e.outcome === 'goal') return { text: `GOAL! ${who} · ${Math.round(e.shot_speed_kmh)} km/h`, goal: true };
+          return { text: `${who} shot ${e.outcome.replace('_', ' ')} · ${Math.round(e.shot_speed_kmh)} km/h` };
+        case 'interception': return { text: `${who} intercepts` };
+        case 'tackle': return e.outcome === 'won' ? { text: `${who} wins the ball` } : null;
+        case 'foul': return { text: `Foul by ${who}${e.card ? ` · ${e.card} card` : ''}` };
+        default: return null;
+      }
+    }
+
+    let lastFeedKey = '';
+    function updateHud(time, period) {
+      let home = 0, away = 0;
+      const homeId = replay.teams.home.team_id;
+      const recent = [];
+      for (const e of events) {
+        if (e.t > time) break;
+        if (e.type === 'shot' && e.outcome === 'goal') { if (e.team_id === homeId) home++; else away++; }
+        if (time - e.t < 25) { const d = describe(e); if (d) recent.push({ e, ...d }); }
+      }
+      $('score').textContent = `${home} – ${away}`;
+      $('clock').textContent = `${period === 1 ? '1st' : '2nd'} ${fmt(time - periodStart[period])}`;
+
+      const items = recent.slice(-6).reverse();
+      const key = items.map((i) => i.e.seq).join(',');
+      if (key !== lastFeedKey) {
+        lastFeedKey = key;
+        $('feed-items').innerHTML = items.map(({ e, text, goal }) => {
+          const colour = replay.teams[sideOf[e.player_id] ?? 'home'].primary;
+          return `<div class="item${goal ? ' goal' : ''}" style="border-left-color:${colour}">` +
+                 `<span class="when">${fmt(e.t - periodStart[e.period])}</span>${text}</div>`;
+        }).join('');
+      }
+    }
+
+    function update(time) {
+      if (!frames.length) return;
+      const n = players.length;
+      const i = frameIndex(time);
+      const f0 = frames[i], f1 = frames[Math.min(i + 1, frames.length - 1)];
+      const span = f1[0] - f0[0];
+      const a = span > 0 && f1[1] === f0[1] ? Math.min(1, Math.max(0, (time - f0[0]) / span)) : 0;
+      const lerp = (k) => f0[k] + (f1[k] - f0[k]) * a;
+      const showSpeed = $('show-speed').checked;
+
+      for (let k = 0; k < n; k++) {
+        const m = meshes[k];
+        m.group.position.copy(toScene(lerp(6 + 2 * k), lerp(7 + 2 * k)));
+        const kmh = f0[6 + 2 * n + k];
+        const fast = showSpeed && kmh >= SPRINT_KMH;
+        m.spd.textContent = fast ? `${Math.round(kmh)} km/h` : '';
+        m.el.classList.toggle('owner', f0[5] === k);
+      }
+
+      ball.position.copy(toScene(lerp(2), lerp(3), lerp(4) + 0.24));
+      const owner = f0[5];
+      ownerRing.visible = owner >= 0;
+      if (owner >= 0) { ownerRing.position.copy(meshes[owner].group.position); ownerRing.position.y = 0.03; }
+
+      const last = trailPoints[trailPoints.length - 1];
+      if (!last || last.distanceTo(ball.position) > 0.25) trailPoints.push(ball.position.clone());
+      if (last && last.distanceTo(ball.position) > 25) trailPoints = [ball.position.clone()];   // jump after a restart
+      if (trailPoints.length > TRAIL) trailPoints.shift();
+      const arr = trailGeom.attributes.position.array;
+      for (let k = 0; k < TRAIL; k++) {
+        const p = trailPoints[Math.min(k, trailPoints.length - 1)] ?? ball.position;
+        arr[3 * k] = p.x; arr[3 * k + 1] = p.y; arr[3 * k + 2] = p.z;
+      }
+      trailGeom.attributes.position.needsUpdate = true;
+
+      updateHud(time, f0[1]);
+      if (!scrubbing) $('timeline').value = duration ? Math.round((time / duration) * 1000) : 0;
+    }
+
+    // ---------------------------------------------------------------- cameras
+    const camPos = new THREE.Vector3(0, 40, 75), camLook = new THREE.Vector3();
+    const wantPos = new THREE.Vector3(), wantLook = new THREE.Vector3();
+    camera.position.copy(camPos);
+
+    function updateCamera(dt) {
+      if (camMode === 'free') { controls.update(); return; }
+      const b = ball.position;
+      if (camMode === 'broadcast') {          // high on the touchline, panning with play
+        wantLook.set(b.x * 0.9, 0, b.z * 0.35);
+        wantPos.set(b.x * 0.9, 30, 58);
+      } else if (camMode === 'tactical') {    // straight down on the whole pitch
+        wantLook.set(0, 0, 0);
+        wantPos.set(0, 112, 0.01);
+      } else if (camMode === 'player' && meshes[followIdx]) {
+        const p = meshes[followIdx].group.position;     // over the player's shoulder, looking at the ball
+        const dir = new THREE.Vector3(b.x - p.x, 0, b.z - p.z);
+        if (dir.lengthSq() < 1) dir.set(1, 0, 0);
+        dir.normalize();
+        wantPos.set(p.x - dir.x * 13, 10, p.z - dir.z * 13);
+        wantLook.set(p.x + dir.x * 5, 0, p.z + dir.z * 5);
+      }
+      const k = 1 - Math.pow(0.02, dt);
+      camPos.lerp(wantPos, k); camLook.lerp(wantLook, k);
+      camera.position.copy(camPos); camera.lookAt(camLook);
+    }
+
+    for (const btn of document.querySelectorAll('#cams button')) {
+      btn.addEventListener('click', () => {
+        camMode = btn.dataset.cam;
+        document.querySelectorAll('#cams button').forEach((b) => b.classList.toggle('active', b === btn));
+        controls.enabled = camMode === 'free';
+        if (controls.enabled) controls.target.copy(camLook);
+      });
+    }
+
+    // ---------------------------------------------------------------- controls
+    $('play').addEventListener('click', () => {
+      if (t >= duration) t = 0;
+      playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play';
+    });
+    $('speed').addEventListener('change', (e) => { speed = Number(e.target.value); });
+    $('timeline').addEventListener('input', (e) => { scrubbing = true; t = (Number(e.target.value) / 1000) * duration; trailPoints = []; });
+    $('timeline').addEventListener('change', () => { scrubbing = false; });
+    $('match').addEventListener('change', (e) => load(e.target.value));
+    $('follow').addEventListener('change', (e) => { followIdx = Number(e.target.value); });
+    $('show-labels').addEventListener('change', (e) => labelRenderer.domElement.classList.toggle('hidden', !e.target.checked));
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space') { e.preventDefault(); $('play').click(); } });
+
+    function resize() {
+      const w = stage.clientWidth, h = stage.clientHeight;
+      renderer.setSize(w, h); labelRenderer.setSize(w, h);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize); resize();
+
+    // ---------------------------------------------------------------- loop
+    const clock = new THREE.Clock();
+    function tick() {
+      const dt = Math.min(clock.getDelta(), 0.1);
+      if (replay && playing && !scrubbing) {
+        t = Math.min(duration, t + dt * speed);
+        if (t >= duration) { playing = false; $('play').textContent = 'Replay'; }
+      }
+      if (replay) update(t);
+      updateCamera(dt);
+      renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+    loadList().catch((err) => { $('status').textContent = `Could not reach the API: ${err.message}`; });
+  </script>
+</body>
+</html>

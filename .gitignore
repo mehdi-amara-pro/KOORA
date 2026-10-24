@@ -16,6 +16,7 @@ htmlcov/
 # Generated
 feed.jsonl
 /schemas/
+data/
 
 # Secrets and local config
 .env

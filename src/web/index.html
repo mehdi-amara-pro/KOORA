@@ -16,12 +16,19 @@
     .headline { font-size: 20px; margin: 8px 0; }
     .ok { color: var(--accent); }
     pre { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+    a.cta { display: block; color: inherit; text-decoration: none; border: 1px solid transparent; }
+    a.cta:hover { border-color: var(--accent); }
   </style>
 </head>
 <body>
   <main>
     <h1>KOORA</h1>
     <p class="sub">Explainable match intelligence. Day-1 pipeline check.</p>
+
+    <a class="card cta" href="/viewer.html">
+      <div class="label">Match viewer</div>
+      <div class="headline">Watch a simulated match in 3D →</div>
+    </a>
 
     <div class="card">
       <div class="label">API status</div>
