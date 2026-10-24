@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KOORA</title>
+  <style>
+    :root { --bg: #0e1116; --card: #171b22; --text: #e8eaed; --muted: #9aa0a6; --accent: #3ddc97; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+    h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: 0.04em; }
+    .sub { color: var(--muted); margin: 0 0 32px; }
+    .card { background: var(--card); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .headline { font-size: 20px; margin: 8px 0; }
+    .ok { color: var(--accent); }
+    pre { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>KOORA</h1>
+    <p class="sub">Explainable match intelligence. Day-1 pipeline check.</p>
+
+    <div class="card">
+      <div class="label">API status</div>
+      <div id="status">Checking…</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Demo insight</div>
+      <div class="headline" id="headline">Loading…</div>
+      <div id="body"></div>
+      <pre id="meta"></pre>
+    </div>
+  </main>
+
+  <script>
+    async function load() {
+      try {
+        const health = await (await fetch("/health")).json();
+        document.getElementById("status").innerHTML =
+          `<span class="ok">${health.status}</span> · app ${health.version} · schema ${health.schema_version}`;
+      } catch (e) {
+        document.getElementById("status").textContent = "API unreachable";
+      }
+      try {
+        const insight = await (await fetch("/api/demo/insight")).json();
+        document.getElementById("headline").textContent = insight.headline;
+        document.getElementById("body").textContent = insight.body ?? "";
+        document.getElementById("meta").textContent =
+          `persona: ${insight.audience.persona} · language: ${insight.audience.language} · ` +
+          `verification: ${insight.verification.status} · evidence: ${insight.evidence_event_ids.join(", ")}`;
+      } catch (e) {
+        document.getElementById("headline").textContent = "Could not load demo insight";
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

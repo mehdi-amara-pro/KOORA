@@ -1,0 +1,15 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "charliermarsh.ruff",
+    "ms-azuretools.vscode-bicep",
+    "ms-azuretools.azure-dev",
+    "ms-azuretools.vscode-azureresourcegroups",
+    "ms-azuretools.vscode-azurecontainerapps",
+    "ms-windows-ai-studio.windows-ai-studio",
+    "GitHub.copilot",
+    "GitHub.copilot-chat",
+    "GitHub.vscode-pull-request-github",
+    "anthropic.claude-code"
+  ]
+}
